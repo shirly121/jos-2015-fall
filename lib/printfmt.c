@@ -34,25 +34,36 @@ static const char * const error_string[MAXERROR] =
  */
 static void
 printnum(void (*putch)(int, void*), void *putdat,
-	 unsigned long long num, unsigned base, int width, int padc)
+	 unsigned long long savednum, unsigned long long num, 
+     unsigned base, int *width, int padc)
 {
 	// if cprintf'parameter includes pattern of the form "%-", padding
 	// space on the right side if neccesary.
 	// you can add helper function if needed.
 	// your code here:
 
-
-	// first recursively print all preceding (more significant) digits
+    // first recursively print all preceding (more significant) digits
 	if (num >= base) {
-		printnum(putch, putdat, num / base, base, width - 1, padc);
+        --(*width);
+		printnum(putch, putdat, savednum, num / base, base, width, padc);
 	} else {
 		// print any needed pad characters before first digit
-		while (--width > 0)
-			putch(padc, putdat);
+		if(padc != '-') {
+            while (--(*width) > 0)
+                putch(padc, putdat);
+        } else {
+            --(*width);
+        }
 	}
 
 	// then print this (the least significant) digit
 	putch("0123456789abcdef"[num % base], putdat);
+    
+    // if padc is '-', print '- 'on the right
+    if(padc == '-' && savednum == num) {
+        while ((*width)-- > 0)
+            putch(' ', putdat);
+    }
 }
 
 // Get an unsigned int of various possible sizes from a varargs list,
@@ -93,6 +104,8 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
 	unsigned long long num;
 	int base, lflag, width, precision, altflag;
 	char padc;
+    // support '+' flag, initialize to '\0'
+    char plusflg = 0;
 
 	while (1) {
 		while ((ch = *(unsigned char *) fmt++) != '%') {
@@ -193,14 +206,29 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
 				putch(' ', putdat);
 			break;
 
-		// (signed) decimal
+        // support '+' flag to print plus or minus
+        case '+':
+            plusflg = '+';
+            goto reswitch;
+        
+        // (signed) decimal
 		case 'd':
 			num = getint(&ap, lflag);
+            // for numbers >= 0 and enable '+' flag, need to print a plus 
+            if ((long long) num >= 0 && plusflg == '+') {
+                putch('+', putdat);
+                if(width >= 0)
+                    --width;
+            }
 			if ((long long) num < 0) {
 				putch('-', putdat);
 				num = -(long long) num;
+                if(width >= 0)
+                    --width;
 			}
 			base = 10;
+            //clear plusflg
+            plusflg = 0;
 			goto number;
 
 		// unsigned decimal
@@ -213,12 +241,15 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
 		case 'o':
 			// Replace this with your code.
 			// display a number in octal form and the form should begin with '0'
-			putch('X', putdat);
-			putch('X', putdat);
-			putch('X', putdat);
-			break;
-
-		// pointer
+			//putch('X', putdat);
+			//putch('X', putdat);
+            //start with 0
+			putch('0', putdat);
+            num = getuint(&ap, lflag);
+            base = 8;
+            goto number;
+		
+        // pointer
 		case 'p':
 			putch('0', putdat);
 			putch('x', putdat);
@@ -232,7 +263,7 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
 			num = getuint(&ap, lflag);
 			base = 16;
 		number:
-			printnum(putch, putdat, num, base, width, padc);
+			printnum(putch, putdat, num, num, base, &width, padc);
 			break;
 
         case 'n': {
@@ -256,7 +287,19 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
             const char *overflow_error = "\nwarning! The value %n argument pointed to has been overflowed!\n";
 
             // Your code here
+            char *pcnt = va_arg(ap, char *);
+            // arg point is null
+            if(!pcnt) {
+                printfmt(putch, putdat, "%s", null_error);
 
+            }else {
+                // pudat is pointer to ch printed counter
+                *pcnt = *((char *)putdat);
+                // overflow!!!
+                if((*pcnt) < 0) {
+                    printfmt(putch, putdat, "%s", overflow_error);
+                }
+            }
             break;
         }
 

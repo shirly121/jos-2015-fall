@@ -44,6 +44,10 @@ i386_init(void)
 	cprintf("chnum1: %d\n", chnum1);
 	cprintf("show me the sign: %+d, %+d\n", 1024, -1024);
 
+    //test my code
+    /*unsigned int i = 0x00646c72;
+    cprintf("H%x Wo%s", 57616, &i);
+    cprintf("x=%d y=%d", 3);*/
 
 	// Test the stack backtrace function (lab 1 only)
 	test_backtrace(5);

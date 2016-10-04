@@ -24,6 +24,8 @@ struct Command {
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
+    { "backtrace", "Diaplay a backtrace of the stack", mon_backtrace },
+    { "time", "Diaplay running time of command", time_cmd },
 };
 #define NCOMMANDS (sizeof(commands)/sizeof(commands[0]))
 
@@ -56,6 +58,29 @@ mon_kerninfo(int argc, char **argv, struct Trapframe *tf)
 	return 0;
 }
 
+int time_cmd(int args, char **argv, struct Trapframe *tf)
+{
+    if(args <= 1) {
+        cprintf("no arg for time cmd!!!\n");
+        return 0;
+    }
+    const char *cmdstr = argv[1];
+    uint64_t st = read_tsc();
+    if(strcmp(cmdstr, "kerninfo") == 0) {
+        mon_kerninfo(args, argv, tf);
+    }else if(strcmp(cmdstr, "help") == 0) {
+        mon_help(args, argv, tf);
+    }else if(strcmp(cmdstr, "backtrace") == 0) {
+        mon_backtrace(args, argv, tf);
+    }else {
+        cprintf("invalid arg for time cmd!!!\n");
+        return 0;
+    }
+    uint64_t ed = read_tsc();
+    // cpu cycles
+	cprintf("%s cycles: %llu\n", cmdstr, ed - st);
+    return 0;
+}
 // Lab1 only
 // read the pointer to the retaddr on the stack
 static uint32_t
@@ -71,6 +96,22 @@ do_overflow(void)
     cprintf("Overflow success\n");
 }
 
+// assign a value from uint16_t to char pointed by char *
+// by cprintf("%n")
+void assign(uint16_t src, char *pdes)
+{
+    char fmt[300];
+    fmt[0] = '"';
+    int idx = 1;
+    while(--src > 0) {
+        fmt[idx++] = ' ';
+    }
+    fmt[idx++] = '%';
+    fmt[idx++] = 'n';
+    fmt[idx++] = '"';
+    fmt[idx++] = '\0';
+    cprintf(fmt, pdes);
+}
 void
 start_overflow(void)
 {
@@ -83,15 +124,48 @@ start_overflow(void)
 
     // hint: You can use the read_pretaddr function to retrieve 
     //       the pointer to the function call return address;
+	
+    // Your code here.
 
-    char str[256] = {};
+    // given 256 is not enough, so i double it
+    char str[256 * 2] = {};
     int nstr = 0;
-    char *pret_addr;
-
-	// Your code here.
     
-
-
+    char *pret_addr = (char *)read_pretaddr();
+    uint32_t ret_addr =(uint32_t)(*((uint32_t *)pret_addr));
+    
+    char *ebp = pret_addr - 4;
+    // instruction
+    // push %ebp
+    assign(0x55, str);
+    // mov %esp, %ebp
+    assign(0x89, str + 1);
+    assign(0xe5, str + 2);
+    // call do_overflow
+    assign(0xe8, str + 3);
+    uint32_t rela_addr =(uint32_t)(&do_overflow) - (uint32_t)(str + 8);
+    assign(rela_addr & 0xff, str + 4);
+    assign((rela_addr >> 8) & 0xff, str + 5);
+    assign((rela_addr >> 16) & 0xff, str + 6);
+    assign((rela_addr >> 24) & 0xff, str + 7);
+    // change addr to return to overflow_me func
+    // mov &overflow_me, %eax
+    assign(0xb8, str + 8);
+    assign(ret_addr & 0xff, str + 9);
+    assign((ret_addr >> 8) & 0xff, str + 10);
+    assign((ret_addr >> 16) & 0xff, str + 11);
+    assign((ret_addr >> 24) & 0xff, str + 12);
+    // mov %eax, 0x4(%ebp)
+    assign(0x89, str + 13);
+    assign(0x45, str + 14);
+    assign(0x04, str + 15);
+    // leave
+    assign(0xc9, str + 16);
+    // ret
+    assign(0xc3, str + 17);
+    
+    // change return addr to return to instruction
+    *((uint32_t*)pret_addr) = (uint32_t)(str);
 }
 
 void
@@ -104,6 +178,29 @@ int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 {
 	// Your code here.
+    uint32_t *ebp = (uint32_t *)read_ebp();
+    uint32_t *peip = NULL;
+    // only one arg
+    uint32_t *parg = NULL;
+    
+    cprintf("Stack backtrace:\nStack backtrace:\n");
+    
+    uint32_t END_FLAG = 0x0;
+    while(ebp && ebp != (uint32_t *)END_FLAG) {
+        peip = ebp + 1;
+        parg = peip + 1;
+        //printf eip ebp args
+        cprintf("eip %08x ebp %08x args %08x %08x %08x %08x %08x\n", *peip, ebp, *parg, *(parg + 1), 
+                *(parg + 2), *(parg + 3), *(parg + 4));
+
+        //printf debug info
+        struct Eipdebuginfo eipinfo;
+        debuginfo_eip(*peip, &eipinfo);
+        uint32_t offset = (uint32_t)((*peip) - eipinfo.eip_fn_addr);
+        cprintf("    %s:%d: %s+%x\n", eipinfo.eip_file, eipinfo.eip_line, eipinfo.eip_fn_name, offset);
+
+        ebp = (uint32_t *)(*ebp);
+    }
     overflow_me();
     cprintf("Backtrace success\n");
 	return 0;
