@@ -261,17 +261,18 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
+    pages = (struct Page *)UPAGES;
     page_free_list = NULL;
 	size_t i;
     //page0 is reserved
     pages[0].pp_link = NULL;
     pages[0].pp_ref = 0;
-	for (i = 1; i < npages; i++) {
-        /*//allocate memory in basemem
+	/*for (i = 1; i < npages; i++) {
+        //allocate memory in basemem
         if(i < npages_basemem){
             pages[i].pp_ref = 0;
             pages[i].pp_link = i * PGSIZE; 
-        }*/
+        }
         //IO hole, kernel, Page table can't be allocated
         if(i >= npages_basemem && i < (uint32_t)(boot_alloc(0) - KERNBASE) / PGSIZE){
             pages[i].pp_link = NULL;
@@ -282,18 +283,18 @@ page_init(void)
             page_free_list = pages + i;
             pages[i].pp_ref = 0;
         }
-        /*//start from nextfree pointer 
+        //start from nextfree pointer 
         else{
             //get next_free
             char *stadd = (char *)boot_alloc(0);
             pages[i].pp_link = stadd
 
-        }*/
-	}
-    char *phyaddr = page_2_phy((char *)(pages + i));
+        }
+	}*/
+    /*char *phyaddr = page_2_phy((char *)(pages + i));
     if(phyaddr == 0x0 || (phyaddr >= (char *)IOPHYSMEM && phyaddr < (char *)(boot_alloc(0) - KERNBASE))){
         cprintf("page init error\n");
-    }
+    }*/
 	chunk_list = NULL;
 }
 //
