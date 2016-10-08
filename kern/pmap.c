@@ -103,8 +103,11 @@ boot_alloc(uint32_t n)
 	// to a multiple of PGSIZE.
 	//
 	// LAB 2: Your code here.
-
-	return NULL;
+    result = nextfree;
+    if(n > 0){
+        nextfree += ROUNDUP(n, PGSIZE);
+    }
+	return result;
 }
 
 // Set up a two-level page table:
@@ -126,7 +129,7 @@ mem_init(void)
 	i386_detect_memory();
 
 	// Remove this line when you're ready to test this function.
-	panic("mem_init: This function is not finished\n");
+	//panic("mem_init: This function is not finished\n");
 
 	//////////////////////////////////////////////////////////////////////
 	// create initial page directory.
@@ -156,8 +159,9 @@ mem_init(void)
 	// particular, we can now map memory using boot_map_region
 	// or page_insert
 	page_init();
-
-	check_page_free_list(1);
+	
+	panic("mem_init: This function is not finished\n");
+    check_page_free_list(1);
 	check_page_alloc();
 	check_page();
 	check_n_pages();
@@ -219,6 +223,11 @@ mem_init(void)
 	// Some more checks, only possible after kern_pgdir is installed.
 	check_page_installed_pgdir();
 }
+char* page_2_phy(char *orig){
+    if(orig == NULL || orig < (char *)pages)return NULL;
+    int pages_off = (orig - (char *)pages) / sizeof(char *);
+    return (char *)(pages_off * PGSIZE);
+}
 
 // --------------------------------------------------------------
 // Tracking of physical pages.
@@ -252,15 +261,41 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
+    page_free_list = NULL;
 	size_t i;
-	for (i = 0; i < npages; i++) {
-		pages[i].pp_ref = 0;
-		pages[i].pp_link = page_free_list;
-		page_free_list = &pages[i];
+    //page0 is reserved
+    pages[0].pp_link = NULL;
+    pages[0].pp_ref = 0;
+	for (i = 1; i < npages; i++) {
+        /*//allocate memory in basemem
+        if(i < npages_basemem){
+            pages[i].pp_ref = 0;
+            pages[i].pp_link = i * PGSIZE; 
+        }*/
+        //IO hole, kernel, Page table can't be allocated
+        if(i >= npages_basemem && i < (uint32_t)(boot_alloc(0) - KERNBASE) / PGSIZE){
+            pages[i].pp_link = NULL;
+            pages[i].pp_ref = 1;
+        }else{
+            //insert into free list head
+            pages[i].pp_link = page_free_list;
+            page_free_list = pages + i;
+            pages[i].pp_ref = 0;
+        }
+        /*//start from nextfree pointer 
+        else{
+            //get next_free
+            char *stadd = (char *)boot_alloc(0);
+            pages[i].pp_link = stadd
+
+        }*/
 	}
+    char *phyaddr = page_2_phy((char *)(pages + i));
+    if(phyaddr == 0x0 || (phyaddr >= (char *)IOPHYSMEM && phyaddr < (char *)(boot_alloc(0) - KERNBASE))){
+        cprintf("page init error\n");
+    }
 	chunk_list = NULL;
 }
-
 //
 // Allocates a physical page.  If (alloc_flags & ALLOC_ZERO), fills the entire
 // returned physical page with '\0' bytes.  Does NOT increment the reference
