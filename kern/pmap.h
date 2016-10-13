@@ -71,8 +71,10 @@ page2pa(struct Page *pp)
 static inline struct Page*
 pa2page(physaddr_t pa)
 {
-	if (PGNUM(pa) >= npages)
+	if (PGNUM(pa) >= npages){
+        cprintf("");
 		panic("pa2page called with invalid pa");
+    }
 	return &pages[PGNUM(pa)];
 }
 

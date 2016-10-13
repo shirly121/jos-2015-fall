@@ -18,6 +18,7 @@ static size_t npages_basemem;	// Amount of base memory (in pages)
 pde_t *kern_pgdir;		// Kernel's initial page directory
 struct Page *pages;		// Physical page state array
 static struct Page *page_free_list;	// Free list of physical pages
+static struct Page *last_free_page; //point at the last free page
 static struct Page *chunk_list;
 
 
@@ -82,6 +83,14 @@ static void boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t 
 // If we're out of memory, boot_alloc should panic.
 // This function may ONLY be used during initialization,
 // before the page_free_list list has been set up.
+void print_addr(struct Page *head){
+    struct Page *tmp = head;
+    while(tmp){
+        cprintf("Page alloc va is %08x\n", tmp - pages);
+        tmp = tmp->pp_link;
+    }
+    cprintf("end of print addr\n");
+}
 static void *
 boot_alloc(uint32_t n)
 {
@@ -129,7 +138,6 @@ mem_init(void)
 	i386_detect_memory();
 
 	// Remove this line when you're ready to test this function.
-	//panic("mem_init: This function is not finished\n");
 
 	//////////////////////////////////////////////////////////////////////
 	// create initial page directory.
@@ -158,9 +166,9 @@ mem_init(void)
 	// memory management will go through the page_* functions. In
 	// particular, we can now map memory using boot_map_region
 	// or page_insert
+    pages = (struct Page *)boot_alloc(sizeof(struct Page) * npages);
 	page_init();
 	
-	panic("mem_init: This function is not finished\n");
     check_page_free_list(1);
 	check_page_alloc();
 	check_page();
@@ -177,6 +185,13 @@ mem_init(void)
 	//      (ie. perm = PTE_U | PTE_P)
 	//    - pages itself -- kernel RW, user NONE
 	// Your code goes here:
+    // virtual addr
+    char *pg_va = (char *)pages;
+    char *pgva_end = (char *)(pages + npages);
+    char *map_va = (char *)UPAGES;
+    for(; pg_va < pgva_end; pg_va += PGSIZE, map_va += PGSIZE){
+        page_insert(kern_pgdir, pa2page(PADDR(pg_va)), map_va, PTE_U | PTE_P);
+    }
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
@@ -189,6 +204,12 @@ mem_init(void)
 	//       overwrite memory.  Known as a "guard page".
 	//     Permissions: kernel RW, user NONE
 	// Your code goes here:
+    pg_va = (char *)bootstack;
+    pgva_end = (char *)(bootstack + KSTKSIZE);
+    map_va = (char *)(KSTACKTOP - KSTKSIZE);
+    for(; pg_va < pgva_end; pg_va += PGSIZE, map_va += PGSIZE){
+        page_insert(kern_pgdir, pa2page(PADDR(pg_va)), map_va, PTE_W | PTE_P);
+    }
 
 	//////////////////////////////////////////////////////////////////////
 	// Map all of physical memory at KERNBASE.
@@ -198,6 +219,31 @@ mem_init(void)
 	// we just set up the mapping anyway.
 	// Permissions: kernel RW, user NONE
 	// Your code goes here:
+    char *pg_pa = (char *)0x0;
+    // number of pages need to map to va
+    int map_npgs = ((long long)0x100000000 - KERNBASE) >> PGSHIFT;
+    map_va = (char *)KERNBASE;
+    for(int i = 0; i < map_npgs; ++i){
+        if(i >= npages && i % npages == 0){
+            //cprintf("i is equal to npages - 1\n");
+            pg_pa = (char *)0x0;
+        }
+        page_insert(kern_pgdir, pa2page((physaddr_t)pg_pa), map_va, PTE_W | PTE_P);
+        // all of the pages are mapped, return to 0x0 physical page
+        map_va += PGSIZE;
+        pg_pa += PGSIZE;
+    }
+    // after insert free page -> pp_ref is not equal to 0 
+    struct Page *free_tmp = chunk_list;
+    while(free_tmp){
+        free_tmp->pp_ref = 0;
+        free_tmp = free_tmp->pp_link;
+    }
+    free_tmp = page_free_list;
+    while(free_tmp){
+        free_tmp->pp_ref = 0;
+        free_tmp = free_tmp->pp_link;
+    }
 
 	// Check that the initial page directory has been set up correctly.
 	check_kern_pgdir();
@@ -261,40 +307,27 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
-    pages = (struct Page *)UPAGES;
     page_free_list = NULL;
+    last_free_page = NULL;
 	size_t i;
-    //page0 is reserved
     pages[0].pp_link = NULL;
     pages[0].pp_ref = 0;
-	/*for (i = 1; i < npages; i++) {
-        //allocate memory in basemem
-        if(i < npages_basemem){
-            pages[i].pp_ref = 0;
-            pages[i].pp_link = i * PGSIZE; 
-        }
-        //IO hole, kernel, Page table can't be allocated
-        if(i >= npages_basemem && i < (uint32_t)(boot_alloc(0) - KERNBASE) / PGSIZE){
+	for (i = 1; i < npages; i++) {
+        if(i >= npages_basemem && i < (uint32_t)(PADDR(boot_alloc(0))) / PGSIZE){
             pages[i].pp_link = NULL;
             pages[i].pp_ref = 1;
         }else{
-            //insert into free list head
-            pages[i].pp_link = page_free_list;
-            page_free_list = pages + i;
+            if(i == 1){
+                page_free_list = pages + i;
+                last_free_page = page_free_list;
+            }else{
+                last_free_page->pp_link = pages + i;
+                last_free_page = pages + i;
+            }
+            pages[i].pp_link = NULL;
             pages[i].pp_ref = 0;
         }
-        //start from nextfree pointer 
-        else{
-            //get next_free
-            char *stadd = (char *)boot_alloc(0);
-            pages[i].pp_link = stadd
-
-        }
-	}*/
-    /*char *phyaddr = page_2_phy((char *)(pages + i));
-    if(phyaddr == 0x0 || (phyaddr >= (char *)IOPHYSMEM && phyaddr < (char *)(boot_alloc(0) - KERNBASE))){
-        cprintf("page init error\n");
-    }*/
+	}
 	chunk_list = NULL;
 }
 //
@@ -310,9 +343,49 @@ struct Page *
 page_alloc(int alloc_flags)
 {
 	// Fill this function in
-	return 0;
+    // out of free memory
+    if(!page_free_list)return NULL;
+    struct Page *to_alloc = page_free_list;
+    page_free_list = page_free_list->pp_link;
+    to_alloc->pp_link = NULL;
+    if(alloc_flags & ALLOC_ZERO)
+        memset((char *)page2kva(to_alloc), 0, PGSIZE);
+    return to_alloc;
 }
+//find n continous free pages in list
+struct Page* get_cons_freepg(int n, struct Page **p_head)
+{
+    struct Page *alloc_st = *p_head;
+    struct Page *before_st = NULL;
+    // return address before continuous n pages
+    while(alloc_st){
+        struct Page *prev_pp = alloc_st;
+        struct Page *alloc_pp = alloc_st->pp_link;
+        int alloc_cnt = 1;
+        while(alloc_pp && alloc_cnt < n && (alloc_pp - prev_pp) == 1){
+            prev_pp = alloc_pp;
+            alloc_pp = alloc_pp->pp_link;
+            ++alloc_cnt;
+        }
+        //alloc n continous pages
+        if(alloc_cnt == n){
+            // take n continuous free pages out of free page list
+            // head is the start of n cons free pages
+            if(!before_st){
+                *p_head = alloc_pp;
+            }else{
+                before_st->pp_link = alloc_pp;
+            }
+            prev_pp->pp_link = NULL;
+            return alloc_st;
+        }
+        alloc_st = alloc_pp;
+        before_st = prev_pp;
+    }
+    // can't find n countinous pages
+	return NULL;
 
+}
 //
 // Allocates n continuous physical page. If (alloc_flags & ALLOC_ZERO), fills the n pages 
 // returned physical page with '\0' bytes.  Does NOT increment the reference
@@ -328,13 +401,44 @@ page_alloc(int alloc_flags)
 // Try to reuse the pages cached in the chuck list
 //
 // Hint: use page2kva and memset
+
 struct Page *
 page_alloc_npages(int alloc_flags, int n)
 {
 	// Fill this function
-	return NULL;
+    if(n <= 0)return NULL;
+    // find n continous pages in chunk list
+    struct Page *result = get_cons_freepg(n, &chunk_list);
+    if(!result)
+        result = get_cons_freepg(n, &page_free_list);
+    
+    if(result && (alloc_flags & ALLOC_ZERO)){
+        memset(page2kva(result), 0, n * PGSIZE);
+    }
+    return result;
 }
+// sequentially
+int insert_cons_freepg(struct Page *st, struct Page *lt, struct Page **p_head)
+{
+    if(!p_head || !st || !lt || lt < st){
+        cprintf("p_head is nil or st is nil or lt is nil or last smaller than st\n");
+        return -1;
+    }
+    struct Page *bger = *p_head;
+    struct Page *prev_bger = NULL;
+    while(bger && bger < lt){
+        prev_bger = bger;
+        bger = bger->pp_link;
+    }
+    lt->pp_link = bger;
+    if(!prev_bger){
+        *p_head = st;
+    }else{
+        prev_bger->pp_link = st;
+    }
 
+    return 0;
+}
 // Return n continuous pages to chunk list. Do the following things:
 //	1. Check whether the n pages int the list are continue, Return -1 on Error
 //	2. Add the pages to the chunk list
@@ -344,6 +448,20 @@ int
 page_free_npages(struct Page *pp, int n)
 {
 	// Fill this function
+    if(!pp)return -1;
+    int i = n;
+    struct Page *ck_pp = pp;
+    while(ck_pp->pp_link && i != 1){
+        ck_pp = ck_pp->pp_link;
+        --i;
+    }
+    //cprintf("ck_pp is %08x\n", ck_pp - pages);
+    // ck_pp point to the n-1 page and continous
+    if(i == 1 && (ck_pp - pp) == (n - 1)){
+        //cprintf("enter into 476 line\n");
+        insert_cons_freepg(pp, ck_pp, &chunk_list);
+        return 0;
+    }
 	return -1;
 }
 
@@ -355,8 +473,37 @@ void
 page_free(struct Page *pp)
 {
 	// Fill this function in
+    if(!pp || pp->pp_ref)
+        panic("pp to free is null or pp ref is not equal to zero\n");
+    insert_cons_freepg(pp, pp, &page_free_list);
+    // insert into free page list sequentially 
 }
-
+// if is cons in list *prev store the page addr just 
+// before the st in free or chunk list
+int is_cons_inlist(struct Page *head, struct Page *st, 
+        struct Page *lt, struct Page **p_prev){
+    *p_prev = NULL;
+    if(!head)return 0;
+    struct Page *free_pp = head;
+    while(free_pp && free_pp != st){
+        *p_prev = free_pp;
+        free_pp = free_pp->pp_link;
+    }
+    while(free_pp && free_pp->pp_link && free_pp != lt){
+        struct Page *next_free = free_pp->pp_link;
+        if(next_free - free_pp != 1)break;
+        free_pp = next_free;
+    }
+    if(free_pp == lt)return 1;
+    return 0;
+}
+// if is cons in list return the page addr just 
+// before the st in free or chunk list
+int is_cons_freepg(struct Page *st, struct Page *lt, struct Page **p_prev){
+    if(!st || !lt)return 0;
+    return is_cons_inlist(chunk_list, st, lt, p_prev) || 
+        is_cons_inlist(page_free_list, st, lt, p_prev);
+}
 //
 // Return new_n continuous pages based on the allocated old_n pages.
 // You can man realloc for better understanding.
@@ -366,7 +513,46 @@ struct Page *
 page_realloc_npages(struct Page *pp, int old_n, int new_n)
 {
 	// Fill this function
-	return NULL;
+    if(!pp || old_n <= 0 || new_n <= 0){
+        cprintf("pp is nil or old_n ,new_n is not valid\n");
+        return NULL;
+    }
+    // no need to shrink or enlarge memory
+    if(old_n == new_n)return NULL;
+    // shrink old memory
+    if(new_n < old_n){
+        struct Page *to_free = pp + new_n;
+        assert(to_free);
+        page_free_npages(to_free, old_n - new_n);
+        pp[new_n - 1].pp_link = NULL;
+        return pp;
+    }
+    // check whether the following pages are free or not
+    if(pp - pages + new_n <= npages){
+        // following pages are in chunk or page free list
+        struct Page *prev; 
+        if(is_cons_freepg(pp + old_n, pp + new_n -1, &prev)){
+            pp[old_n - 1].pp_link = pp + old_n;
+            // new free page starts at head
+            if(prev == NULL && (pp + old_n) == chunk_list){
+                chunk_list = pp[new_n - 1].pp_link;
+            }else if(prev == NULL && (pp + old_n == page_free_list)){
+                page_free_list = pp[new_n - 1].pp_link;
+            }else if(prev != NULL){
+                prev->pp_link = pp[new_n - 1].pp_link; 
+            }else{
+                cprintf("error: can't access this branch"
+                        "in realloc func\n");
+            }
+            pp[new_n - 1].pp_link = NULL;
+            return pp;
+        }
+    }
+    // need to realloc new_n free pages 
+    struct Page *renew = page_alloc_npages(0, new_n);
+    memcpy(renew, pp, old_n);
+    page_free_npages(pp, old_n);
+    return renew;
 }
 
 //
@@ -406,7 +592,26 @@ pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
 	// Fill this function in
-	return NULL;
+    assert(pgdir);
+    pte_t *base_va = NULL;
+    if(pgdir[PDX(va)] == (pde_t)NULL){
+        if(!create)return NULL;
+        
+        struct Page *new_pt = page_alloc(1);
+        // fail to alloc a new page table page
+        if(!new_pt)return NULL;
+        
+        // a new page table page 
+        new_pt->pp_ref += 1;
+        // add it into page dir
+        pgdir[PDX(va)] = (pde_t)page2pa(new_pt) | PTE_P | PTE_W | PTE_U;
+        base_va = (pte_t *)page2kva(new_pt);
+    }else{
+        pte_t entry = pgdir[PDX(va)];
+        // actually PTE_ADDR(entry) + KERNBASE is virtual base addr
+        base_va = (pte_t *)KADDR(PTE_ADDR(entry));
+    }
+	return base_va + PTX(va);
 }
 
 //
@@ -453,6 +658,24 @@ int
 page_insert(pde_t *pgdir, struct Page *pp, void *va, int perm)
 {
 	// Fill this function in
+    //cprintf("perm is %08x\n", perm);
+    assert(pgdir && pp);
+    pte_t *entry = pgdir_walk(pgdir, va, 1);
+    if(!entry){
+        cprintf("cannot allocate page table\n");
+        return -E_NO_MEM; 
+    }
+    // need to insert into page table
+    if(page2pa(pp) != PTE_ADDR(*entry)){
+        if(*entry != (pte_t)NULL){
+            page_remove(pgdir, va);
+        }
+        *entry = page2pa(pp) | perm | PTE_P;
+        pp->pp_ref += 1;
+    }else{ //  pp is alreadly mapped in page table
+        // change permission
+        *entry |= (perm | PTE_P);
+    }
 	return 0;
 }
 
@@ -471,7 +694,16 @@ struct Page *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
 	// Fill this function in
-	return NULL;
+    assert(pgdir);
+    struct Page *result = NULL;
+    pte_t *entry = pgdir_walk(pgdir, va, 0);
+    if(entry && (*entry) != (pte_t)NULL){
+        result = (struct Page *)pa2page(PTE_ADDR(*entry));
+    }
+    if(pte_store){
+        *pte_store = entry;
+    }
+	return result;
 }
 
 //
@@ -493,6 +725,16 @@ void
 page_remove(pde_t *pgdir, void *va)
 {
 	// Fill this function in
+    assert(pgdir);
+    pte_t *entry;
+    struct Page *mapped = page_lookup(pgdir, va, &entry);
+    if(mapped){
+        memset(entry, 0, 4);
+        tlb_invalidate(pgdir, va);
+        if(--mapped->pp_ref == 0){
+            page_free(mapped);
+        }
+    }
 }
 
 //
@@ -531,21 +773,25 @@ check_page_free_list(bool only_low_memory)
 		// list, since entry_pgdir does not map all pages.
 		struct Page *pp1, *pp2;
 		struct Page **tp[2] = { &pp1, &pp2 };
+        int test_pgtype;
 		for (pp = page_free_list; pp; pp = pp->pp_link) {
 			int pagetype = PDX(page2pa(pp)) >= pdx_limit;
-			*tp[pagetype] = pp;
+            test_pgtype = pagetype;
+            *tp[pagetype] = pp;
 			tp[pagetype] = &pp->pp_link;
 		}
 		*tp[1] = 0;
 		*tp[0] = pp2;
-		page_free_list = pp1;
+        page_free_list = pp1;
 	}
 
 	// if there's a page that shouldn't be on the free list,
 	// try to make sure it eventually causes trouble.
+    //int free_cnt = 0;
 	for (pp = page_free_list; pp; pp = pp->pp_link){
-		if (PDX(page2pa(pp)) < pdx_limit)
+		if (PDX(page2pa(pp)) < pdx_limit){
 			memset(page2kva(pp), 0x97, 128);
+        }
 	}
 
 	first_free_page = (char *) boot_alloc(0);
@@ -591,7 +837,6 @@ check_page_alloc(void)
 	// check number of free pages
 	for (pp = page_free_list, nfree = 0; pp; pp = pp->pp_link)
 		++nfree;
-
 	// should be able to allocate three pages
 	pp0 = pp1 = pp2 = 0;
 	assert((pp0 = page_alloc(0)));
@@ -611,7 +856,7 @@ check_page_alloc(void)
 
 	// should be no free memory
 	assert(!page_alloc(0));
-
+    
 	// free and re-allocate?
 	page_free(pp0);
 	page_free(pp1);
@@ -624,7 +869,7 @@ check_page_alloc(void)
 	assert(pp1 && pp1 != pp0);
 	assert(pp2 && pp2 != pp1 && pp2 != pp0);
 	assert(!page_alloc(0));
-
+    
 	// test flags
 	memset(page2kva(pp0), 1, PGSIZE);
 	page_free(pp0);
@@ -751,7 +996,7 @@ check_page(void)
 
 	// there is no page allocated at address 0
 	assert(page_lookup(kern_pgdir, (void *) 0x0, &ptep) == NULL);
-
+    //panic("func is not finished\n");
 	// there is no free memory, so we can't allocate a page table
 	assert(page_insert(kern_pgdir, pp1, 0x0, PTE_W) < 0);
 
@@ -760,6 +1005,7 @@ check_page(void)
 	assert(page_insert(kern_pgdir, pp1, 0x0, PTE_W) == 0);
 	assert(PTE_ADDR(kern_pgdir[0]) == page2pa(pp0));
 	assert(check_va2pa(kern_pgdir, 0x0) == page2pa(pp1));
+
 	assert(pp1->pp_ref == 1);
 	assert(pp0->pp_ref == 1);
 
@@ -902,7 +1148,8 @@ check_n_pages(void)
 	// Free pp and assign four continuous pages
 	page_free(pp);
 	pp = page_alloc_npages(0, 4);
-	assert(check_continuous(pp, 4));
+
+    assert(check_continuous(pp, 4));
 
 	// Free four continuous pages
 	assert(!page_free_npages(pp, 4));
@@ -953,7 +1200,7 @@ check_realloc_npages(void)
 	pp = page_alloc_npages(0, 8);
 	assert(check_continuous(pp, 8));
 
-	// Realloc to 4 pages
+    // Realloc to 4 pages
 	pp0 = page_realloc_npages(pp, 8, 4);
 	assert(pp0 == pp);
 	assert(check_continuous(pp, 4));
@@ -966,7 +1213,7 @@ check_realloc_npages(void)
 	// Realloc to 12 pages
 	pp0 = page_realloc_npages(pp, 6, 12);
 	assert(check_continuous(pp0, 12));
-
+	
 	// Free 12 continuous pages
 	assert(!page_free_npages(pp0, 12));
 
