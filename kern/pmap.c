@@ -70,6 +70,14 @@ static void check_n_pages(void);
 static void check_realloc_npages(void);
 static void check_page_installed_pgdir(void);
 static void boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm);
+void print_addr(struct Page *head){
+    struct Page *tmp = head;
+    while(tmp){
+        cprintf("Page alloc va is %08x\n", tmp - pages);
+        tmp = tmp->pp_link;
+    }
+    cprintf("end of print addr\n");
+}
 
 // This simple physical memory allocator is used only while JOS is setting
 // up its virtual memory system.  page_alloc() is the real allocator.
@@ -83,14 +91,6 @@ static void boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t 
 // If we're out of memory, boot_alloc should panic.
 // This function may ONLY be used during initialization,
 // before the page_free_list list has been set up.
-void print_addr(struct Page *head){
-    struct Page *tmp = head;
-    while(tmp){
-        cprintf("Page alloc va is %08x\n", tmp - pages);
-        tmp = tmp->pp_link;
-    }
-    cprintf("end of print addr\n");
-}
 static void *
 boot_alloc(uint32_t n)
 {
